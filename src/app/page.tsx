@@ -183,6 +183,17 @@ export default function Home() {
       ),
     );
   };
+    const resetSimulation = () => {
+    setStations(
+      initialStations.map((station) => ({
+        ...station,
+        scales: station.scales.map((scale) => ({ ...scale })),
+      })),
+    );
+    setErpEvents([]);
+    setElapsedSeconds(0);
+  };
+
   const statusLabel: Record<StationStatus, string> = {
     ready: "Hazır",
     running: "Çalışıyor",
@@ -212,20 +223,29 @@ export default function Home() {
               </p>
             </div>
 
-            <div className="flex overflow-hidden rounded-lg border border-cyan-900">
-              {[1, 10, 30].map((speed) => (
-                <button
-                  key={speed}
-                  onClick={() => setSimulationSpeed(speed)}
-                  className={`px-5 py-3 text-sm font-bold transition ${
-                    simulationSpeed === speed
-                      ? "bg-cyan-500 text-slate-950"
-                      : "bg-slate-950 text-slate-200 hover:bg-slate-800"
-                  }`}
-                >
-                  x{speed}
-                </button>
-              ))}
+                        <div className="flex flex-wrap justify-end gap-3">
+              <button
+                onClick={resetSimulation}
+                className="rounded-lg border border-slate-700 bg-slate-900 px-4 py-3 text-sm font-bold text-slate-200 transition hover:bg-slate-800"
+              >
+                Simülasyonu Sıfırla
+              </button>
+
+              <div className="flex overflow-hidden rounded-lg border border-cyan-900">
+                {[1, 10, 30].map((speed) => (
+                  <button
+                    key={speed}
+                    onClick={() => setSimulationSpeed(speed)}
+                    className={`px-5 py-3 text-sm font-bold transition ${
+                      simulationSpeed === speed
+                        ? "bg-cyan-500 text-slate-950"
+                        : "bg-slate-950 text-slate-200 hover:bg-slate-800"
+                    }`}
+                  >
+                    x{speed}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </header>
