@@ -1,5 +1,7 @@
 import type { ScaleState } from "./types";
 
+import { STATION_NAMES } from "./data";
+
 type Props = {
   scales: ScaleState[];
   running: boolean;
@@ -138,7 +140,19 @@ function StationBox({
           marginBottom: "14px",
         }}
       >
-        <strong>İstasyon {stationNo}</strong>
+        <div>
+          <strong>{STATION_NAMES[stationNo]}</strong>
+
+          <div
+            style={{
+              color: "#94a3b8",
+              fontSize: "10px",
+              marginTop: "3px",
+            }}
+          >
+            İSTASYON {stationNo}
+          </div>
+        </div>
 
         <span>{running ? "●" : finished ? "✓" : "○"}</span>
       </div>

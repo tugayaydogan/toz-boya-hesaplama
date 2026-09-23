@@ -32,7 +32,11 @@ export const SCALE_DEFINITIONS: ScaleDefinition[] = [
     station_no: 3,
   },
 ];
-
+export const STATION_NAMES: Record<number, string> = {
+  1: "Büyük Toz Boya",
+  2: "Küçük Toz Boya",
+  3: "Tünel Toz Boya",
+};
 export const INITIAL_WEIGHTS: Record<number, number> = {
   1: 120.5,
   2: 96.8,

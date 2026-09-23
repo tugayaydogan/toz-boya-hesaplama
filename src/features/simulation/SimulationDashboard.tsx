@@ -4,7 +4,11 @@ import Link from "next/link";
 
 import { useEffect, useRef, useState } from "react";
 
-import { createInitialScales, formatSimulationTime } from "./data";
+import {
+  createInitialScales,
+  formatSimulationTime,
+  STATION_NAMES,
+} from "./data";
 
 import {
   SIMULATION_SPEED,
@@ -30,19 +34,17 @@ import { getCompletedJobs, saveCompletedJob } from "./storage";
 import {
   EmptyMessage,
   EventRow,
-  Info,
   JsonViewer,
-  MainButton,
   MessageBox,
   Metric,
   Panel,
-  StatusItem,
   TableCell,
   TableHeader,
 } from "./ui";
 
 import ScaleCard from "./ScaleCard";
 import ProcessOverview from "./ProcessOverview";
+import DemoControlBar from "./DemoControlBar";
 
 export default function SimulationDashboard() {
   const [scales, setScales] = useState<ScaleState[]>(createInitialScales());
@@ -70,6 +72,10 @@ export default function SimulationDashboard() {
 
   const finished = systemState === "COMPLETED";
 
+  /*
+    Sayfadan çıkıldığında çalışan
+    interval varsa temizlenir.
+  */
   useEffect(() => {
     return () => {
       if (intervalRef.current) {
@@ -97,11 +103,19 @@ export default function SimulationDashboard() {
     ]);
   }
 
+  /*
+    ERP START_JOB
+  */
+
   async function startJobFromERP() {
     if (systemState !== "IDLE") {
       return;
     }
 
+    /*
+      Geçmiş işlere bakıp
+      sıradaki iş emri numarasını üret.
+    */
     const previousJobs = await getCompletedJobs();
 
     const highestJobNumber = previousJobs.reduce((highest, previousJob) => {
@@ -136,8 +150,8 @@ export default function SimulationDashboard() {
     };
 
     /*
-      START_JOB geldiği anda
-      başlangıç tartı değerlerini alıyoruz.
+      START_JOB anında
+      tartıların başlangıç değerleri alınır.
     */
     const initialScales = createInitialScales();
 
@@ -161,7 +175,7 @@ export default function SimulationDashboard() {
 
         level: "SUCCESS",
 
-        message: `ERP START_JOB alındı. İş Emri: ${workOrderNo}`,
+        message: `ERP START_JOB sinyali alındı. İş Emri: ${workOrderNo}`,
       },
 
       {
@@ -181,9 +195,13 @@ export default function SimulationDashboard() {
 
         level: "SUCCESS",
 
-        message: "x30 simülasyon başlatıldı.",
+        message: "x30 tartım simülasyonu başlatıldı.",
       },
     ]);
+
+    /*
+      Sanal tartım motoru.
+    */
 
     intervalRef.current = setInterval(() => {
       setSimulatedSeconds(
@@ -196,10 +214,19 @@ export default function SimulationDashboard() {
     }, SIMULATION_TICK_MS);
   }
 
-  function endJobFromERP() {
+  /*
+    ERP END_JOB
+  */
+
+  async function endJobFromERP() {
     if (!job || systemState !== "RUNNING") {
       return;
     }
+
+    /*
+      END_JOB geldiği anda
+      tartılar durdurulur.
+    */
 
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
@@ -218,10 +245,12 @@ export default function SimulationDashboard() {
     setErpSignals((previous) => [...previous, endSignal]);
 
     /*
-      Gerçek sistem mantığı:
+      GERÇEK SİSTEM MANTIĞI
 
-      consumption =
-      startWeight - endWeight
+      TÜKETİM =
+      BAŞLANGIÇ AĞIRLIĞI
+      -
+      BİTİŞ AĞIRLIĞI
     */
 
     const scaleResults = scales.map((scale) => {
@@ -240,10 +269,19 @@ export default function SimulationDashboard() {
       };
     });
 
+    /*
+      5 tartının toplam tüketimi.
+    */
+
     const totalConsumption = scaleResults.reduce(
       (total, result) => total + result.consumption,
       0,
     );
+
+    /*
+      ERP'ye gönderilecek
+      simüle edilmiş cevap.
+    */
 
     const message: OutgoingMessage = {
       messageType: "JOB_COMPLETED",
@@ -263,6 +301,10 @@ export default function SimulationDashboard() {
 
     setOutgoingMessage(message);
 
+    /*
+      IndexedDB kayıt modeli.
+    */
+
     const historyRecord: CompletedJobRecord = {
       ...message,
 
@@ -273,7 +315,12 @@ export default function SimulationDashboard() {
       completedAt: new Date().toISOString(),
     };
 
-    void saveCompletedJob(historyRecord);
+    /*
+      İş sonucu lokal veritabanına
+      kaydedilir.
+    */
+
+    await saveCompletedJob(historyRecord);
 
     setSystemState("COMPLETED");
 
@@ -285,8 +332,12 @@ export default function SimulationDashboard() {
 
     addEvent("JOB_COMPLETED cevabı ERP için hazırlandı.", "SUCCESS");
 
-    addEvent("Simülasyon sonucu iş geçmişine kaydedildi.", "SUCCESS");
+    addEvent("Simülasyon sonucu IndexedDB veritabanına kaydedildi.", "SUCCESS");
   }
+
+  /*
+    SIMÜLASYONU SIFIRLA
+  */
 
   function resetSimulation() {
     if (intervalRef.current) {
@@ -310,51 +361,54 @@ export default function SimulationDashboard() {
     setEventLogs([]);
   }
 
+  /*
+    CANLI TOPLAM TÜKETİM
+  */
+
   const totalConsumption = scales.reduce(
     (total, scale) => total + scale.consumption,
     0,
   );
 
-  function statusText() {
-    if (running) {
-      return "ÜRETİM ÇALIŞIYOR";
-    }
-
-    if (finished) {
-      return "İŞ TAMAMLANDI";
-    }
-
-    return "ERP START_JOB BEKLENİYOR";
-  }
-
   return (
     <main
       style={{
         minHeight: "100vh",
+
         background: "#0f172a",
+
         color: "white",
-        padding: "32px",
+
+        padding: "26px",
 
         fontFamily: "Arial, Helvetica, sans-serif",
       }}
     >
-      {/* HEADER */}
+      {/* ========================= */}
+      {/* HEADER                    */}
+      {/* ========================= */}
 
       <header
         style={{
           display: "flex",
+
           justifyContent: "space-between",
+
           alignItems: "flex-start",
+
           gap: "20px",
+
           flexWrap: "wrap",
 
-          marginBottom: "25px",
+          marginBottom: "20px",
         }}
       >
         <div>
           <h1
             style={{
-              marginBottom: "6px",
+              margin: "0 0 6px 0",
+
+              fontSize: "22px",
             }}
           >
             Endüstriyel Tartım Simülatörü
@@ -363,6 +417,7 @@ export default function SimulationDashboard() {
           <p
             style={{
               margin: 0,
+
               color: "#94a3b8",
             }}
           >
@@ -375,9 +430,9 @@ export default function SimulationDashboard() {
               style={{
                 display: "inline-block",
 
-                marginTop: "15px",
+                marginTop: "12px",
 
-                padding: "10px 16px",
+                padding: "9px 14px",
 
                 background: "#334155",
 
@@ -388,6 +443,8 @@ export default function SimulationDashboard() {
                 borderRadius: "8px",
 
                 fontWeight: "bold",
+
+                fontSize: "12px",
               }}
             >
               İŞ GEÇMİŞİ
@@ -396,6 +453,7 @@ export default function SimulationDashboard() {
         </div>
 
         <button
+          type="button"
           onClick={() => setPresentationMode((previous) => !previous)}
           style={{
             padding: "11px 18px",
@@ -417,98 +475,28 @@ export default function SimulationDashboard() {
         </button>
       </header>
 
-      {/* ERP KONTROL */}
+      {/* ========================= */}
+      {/* ÜST KONTROL MERKEZİ       */}
+      {/* ========================= */}
 
-      <Panel>
-        <h2
-          style={{
-            marginTop: 0,
-          }}
-        >
-          ERP Sinyal Simülatörü
-        </h2>
+      <DemoControlBar
+        job={job}
+        scales={scales}
+        systemState={systemState}
+        simulatedSeconds={simulatedSeconds}
+        totalConsumption={totalConsumption}
+        onStart={() => {
+          void startJobFromERP();
+        }}
+        onFinish={() => {
+          void endJobFromERP();
+        }}
+        onReset={resetSimulation}
+      />
 
-        <p
-          style={{
-            color: "#94a3b8",
-          }}
-        >
-          Gerçek sistemde ERP tarafından gönderilen START_JOB ve END_JOB
-          sinyallerini simüle eder.
-        </p>
-
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "18px",
-            flexWrap: "wrap",
-          }}
-        >
-          <MainButton
-            onClick={startJobFromERP}
-            disabled={systemState !== "IDLE"}
-          >
-            ERP → İŞ BAŞLAT
-          </MainButton>
-
-          <MainButton onClick={endJobFromERP} disabled={!running}>
-            ERP → İŞ BİTİR
-          </MainButton>
-
-          <MainButton onClick={resetSimulation}>SIFIRLA</MainButton>
-
-          <StatusItem label="Durum" value={statusText()} />
-
-          <StatusItem
-            label="Simülasyon"
-            value={formatSimulationTime(simulatedSeconds)}
-          />
-
-          <StatusItem label="Hız" value="x30" />
-        </div>
-      </Panel>
-
-      {/* AKTİF İŞ */}
-
-      <Panel>
-        <h2
-          style={{
-            marginTop: 0,
-          }}
-        >
-          Aktif İş
-        </h2>
-
-        {job ? (
-          <div
-            style={{
-              display: "flex",
-              gap: "50px",
-              flexWrap: "wrap",
-            }}
-          >
-            <Info title="İş Emri" value={job.workOrderNo} />
-
-            <Info
-              title="Başlangıç"
-              value={new Date(job.startedAt).toLocaleString("tr-TR")}
-            />
-
-            <Info title="Durum" value={statusText()} />
-          </div>
-        ) : (
-          <div
-            style={{
-              color: "#64748b",
-            }}
-          >
-            ERP START_JOB sinyali bekleniyor.
-          </div>
-        )}
-      </Panel>
-
-      {/* TEKNİK ERP MESAJLARI */}
+      {/* ========================= */}
+      {/* TEKNİK ERP MESAJLARI      */}
+      {/* ========================= */}
 
       {!presentationMode && (
         <Panel>
@@ -520,6 +508,17 @@ export default function SimulationDashboard() {
             ERP Mesaj Monitörü
           </h2>
 
+          <p
+            style={{
+              color: "#94a3b8",
+
+              fontSize: "13px",
+            }}
+          >
+            Simülasyonda ERP ile tartım sistemi arasında gerçekleşen START_JOB,
+            END_JOB ve JOB_COMPLETED mesajları.
+          </p>
+
           <div
             style={{
               display: "grid",
@@ -530,7 +529,7 @@ export default function SimulationDashboard() {
             }}
           >
             <MessageBox title="ERP → Tartım Sistemi" badge="GELEN">
-              {erpSignals.length ? (
+              {erpSignals.length > 0 ? (
                 <JsonViewer data={erpSignals} />
               ) : (
                 <EmptyMessage>ERP sinyali bekleniyor...</EmptyMessage>
@@ -551,11 +550,15 @@ export default function SimulationDashboard() {
         </Panel>
       )}
 
-      {/* PROSES */}
+      {/* ========================= */}
+      {/* CANLI PROSES              */}
+      {/* ========================= */}
 
       <ProcessOverview scales={scales} running={running} finished={finished} />
 
-      {/* ÖZET */}
+      {/* ========================= */}
+      {/* CANLI ÖZET                */}
+      {/* ========================= */}
 
       <Panel>
         <h2
@@ -569,7 +572,9 @@ export default function SimulationDashboard() {
         <div
           style={{
             display: "flex",
+
             gap: "50px",
+
             flexWrap: "wrap",
           }}
         >
@@ -583,11 +588,15 @@ export default function SimulationDashboard() {
             value={formatSimulationTime(simulatedSeconds)}
           />
 
-          <Metric title="Aktif Tartı" value="5" />
+          <Metric title="Tartı Sayısı" value="5" />
+
+          <Metric title="İstasyon Sayısı" value="3" />
         </div>
       </Panel>
 
-      {/* İSTASYONLAR */}
+      {/* ========================= */}
+      {/* İSTASYONLAR               */}
+      {/* ========================= */}
 
       {[1, 2, 3].map((stationNo) => {
         const stationScales = scales.filter(
@@ -607,12 +616,72 @@ export default function SimulationDashboard() {
               borderRadius: "14px",
             }}
           >
-            <h2>İstasyon {stationNo}</h2>
+            {/* İSTASYON BAŞLIĞI */}
 
             <div
               style={{
                 display: "flex",
+
+                justifyContent: "space-between",
+
+                alignItems: "center",
+
+                gap: "15px",
+
+                marginBottom: "18px",
+              }}
+            >
+              <div>
+                <h2
+                  style={{
+                    margin: 0,
+                  }}
+                >
+                  {STATION_NAMES[stationNo]}
+                </h2>
+
+                <div
+                  style={{
+                    color: "#94a3b8",
+
+                    fontSize: "12px",
+
+                    marginTop: "4px",
+                  }}
+                >
+                  İstasyon {stationNo}
+                </div>
+              </div>
+
+              <span
+                style={{
+                  padding: "6px 11px",
+
+                  borderRadius: "20px",
+
+                  background: running
+                    ? "#14532d"
+                    : finished
+                      ? "#1e3a5f"
+                      : "#334155",
+
+                  fontSize: "11px",
+
+                  fontWeight: "bold",
+                }}
+              >
+                {running ? "CANLI" : finished ? "TAMAMLANDI" : "BEKLEME"}
+              </span>
+            </div>
+
+            {/* TARTILAR */}
+
+            <div
+              style={{
+                display: "flex",
+
                 gap: "20px",
+
                 flexWrap: "wrap",
               }}
             >
@@ -629,7 +698,9 @@ export default function SimulationDashboard() {
         );
       })}
 
-      {/* EVENT LOG */}
+      {/* ========================= */}
+      {/* TEKNİK EVENT LOG          */}
+      {/* ========================= */}
 
       {!presentationMode && (
         <Panel>
@@ -641,7 +712,7 @@ export default function SimulationDashboard() {
             Sistem Günlüğü
           </h2>
 
-          {eventLogs.length ? (
+          {eventLogs.length > 0 ? (
             eventLogs
               .slice()
               .reverse()
@@ -658,17 +729,72 @@ export default function SimulationDashboard() {
         </Panel>
       )}
 
-      {/* SONUÇ */}
+      {/* ========================= */}
+      {/* ERP SONUCU                */}
+      {/* ========================= */}
 
       {finished && outgoingMessage && (
         <Panel>
-          <h2
+          <div
             style={{
-              marginTop: 0,
+              display: "flex",
+
+              justifyContent: "space-between",
+
+              alignItems: "center",
+
+              gap: "20px",
+
+              flexWrap: "wrap",
+
+              marginBottom: "22px",
             }}
           >
-            ERP&apos;ye Gönderilecek Tüketim Sonucu
-          </h2>
+            <div>
+              <h2
+                style={{
+                  margin: 0,
+                }}
+              >
+                ERP&apos;ye Gönderilecek Tüketim Sonucu
+              </h2>
+
+              <div
+                style={{
+                  marginTop: "6px",
+
+                  color: "#94a3b8",
+                }}
+              >
+                İş Emri:{" "}
+                <strong
+                  style={{
+                    color: "white",
+                  }}
+                >
+                  {outgoingMessage.workOrderNo}
+                </strong>
+              </div>
+            </div>
+
+            <div
+              style={{
+                background: "#14532d",
+
+                padding: "9px 15px",
+
+                borderRadius: "20px",
+
+                fontWeight: "bold",
+
+                fontSize: "12px",
+              }}
+            >
+              JOB_COMPLETED ✓
+            </div>
+          </div>
+
+          {/* SONUÇ TABLOSU */}
 
           <div
             style={{
@@ -678,6 +804,7 @@ export default function SimulationDashboard() {
             <table
               style={{
                 width: "100%",
+
                 borderCollapse: "collapse",
               }}
             >
@@ -698,7 +825,7 @@ export default function SimulationDashboard() {
               <tbody>
                 {outgoingMessage.scaleResults.map((result) => (
                   <tr key={result.scaleNo}>
-                    <TableCell>İstasyon {result.stationNo}</TableCell>
+                    <TableCell>{STATION_NAMES[result.stationNo]}</TableCell>
 
                     <TableCell>Tartı {result.scaleNo}</TableCell>
 
@@ -706,20 +833,24 @@ export default function SimulationDashboard() {
 
                     <TableCell>{result.endWeight.toFixed(3)} kg</TableCell>
 
-                    <TableCell>{result.consumption.toFixed(3)} kg</TableCell>
+                    <TableCell>
+                      <strong>{result.consumption.toFixed(3)} kg</strong>
+                    </TableCell>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
 
+          {/* TOPLAM */}
+
           <div
             style={{
-              marginTop: "30px",
+              marginTop: "28px",
             }}
           >
             <Metric
-              title="Toplam Tüketim"
+              title="ERP'ye Gönderilecek Toplam Tüketim"
               value={`${outgoingMessage.totalConsumption.toFixed(3)} kg`}
             />
           </div>
