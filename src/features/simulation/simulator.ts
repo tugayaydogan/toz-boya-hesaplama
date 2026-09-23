@@ -1,11 +1,13 @@
-import { ScaleState } from "./types";
+import type { ScaleState } from "./types";
 
 export const SIMULATION_TICK_MS = 250;
-
 export const SIMULATION_SPEED = 30;
 
 /*
+  Birim:
   kg / simülasyon dakikası
+
+  Her tartının tüketim hızı birbirinden farklı.
 */
 const CONSUMPTION_RATE: Record<number, number> = {
   1: 0.3,
@@ -15,91 +17,52 @@ const CONSUMPTION_RATE: Record<number, number> = {
   5: 0.2,
 };
 
-function randomBetween(
-  min: number,
-  max: number
-) {
-  return (
-    Math.random() * (max - min) + min
-  );
+function randomBetween(min: number, max: number) {
+  return Math.random() * (max - min) + min;
 }
 
-export function simulateScaleTick(
-  scale: ScaleState
-): ScaleState {
-  const baseRate =
-    CONSUMPTION_RATE[scale.scale_no] ?? 0.1;
+export function simulateScaleTick(scale: ScaleState): ScaleState {
+  const baseRate = CONSUMPTION_RATE[scale.scale_no] ?? 0.1;
 
   /*
     250 ms gerçek zaman
-    ×30 hız
+    x30 hız
     = 7.5 simülasyon saniyesi
-    = 0.125 simülasyon dakikası
   */
   const simulatedMinutes =
-    (SIMULATION_TICK_MS / 1000) *
-    SIMULATION_SPEED /
-    60;
+    ((SIMULATION_TICK_MS / 1000) * SIMULATION_SPEED) / 60;
 
   /*
-    Proses tüketiminde küçük doğal değişim.
-    ±%4
+    Proseste küçük doğal tüketim farkları.
   */
-  const processVariation =
-    randomBetween(0.96, 1.04);
+  const processVariation = randomBetween(0.96, 1.04);
 
-  const consumptionDelta =
-    baseRate *
-    simulatedMinutes *
-    processVariation;
+  const consumptionDelta = baseRate * simulatedMinutes * processVariation;
 
   /*
-    Gerçek sanal fiziksel ağırlık.
-
-    Ölçüm gürültüsü buna eklenmez.
+    Sanal fiziksel ağırlık.
   */
-  const newProcessWeight =
-    Math.max(
-      0,
-      scale.processWeight -
-        consumptionDelta
-    );
+  const newProcessWeight = Math.max(0, scale.processWeight - consumptionDelta);
 
   /*
-    Tartının anlık okuma gürültüsü:
-    ±3 gram.
-
-    Bu yalnızca gösterilen ölçümü etkiler.
+    Tartı okumasında ±3 gram noise.
   */
-  const measurementNoise =
-    randomBetween(-0.003, 0.003);
+  const measurementNoise = randomBetween(-0.003, 0.003);
 
-  const measuredWeight =
-    Math.max(
-      0,
-      newProcessWeight +
-        measurementNoise
-    );
+  const measuredWeight = Math.max(0, newProcessWeight + measurementNoise);
 
   /*
-    Gerçek sistemde tüketim başlangıç
-    ve anlık tartı okumasının farkıdır.
+    Gerçek sistemdeki temel hesap:
+    tüketim = başlangıç - güncel ağırlık
   */
-  const consumption =
-    Math.max(
-      0,
-      scale.startWeight -
-        measuredWeight
-    );
+  const consumption = Math.max(0, scale.startWeight - measuredWeight);
 
   return {
     ...scale,
 
-    processWeight:
-      newProcessWeight,
+    processWeight: newProcessWeight,
 
-    currentWeight:
-      measuredWeight,
+    currentWeight: measuredWeight,
 
     consumption,
   };

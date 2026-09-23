@@ -5,54 +5,31 @@ export type ScaleDefinition = {
   station_no: number;
 };
 
-export type RecipeItem = {
-  scaleNo: number;
-  materialCode: string;
-  materialName: string;
-  plannedConsumption: number;
-  actualTargetConsumption: number;
-};
-
-export type JobOrder = {
-  workOrderNo: string;
-  productCode: string;
-  productName: string;
-  quantity: number;
-  recipeCode: string;
-  recipe: RecipeItem[];
-};
-
 export type ScaleState = ScaleDefinition & {
-  materialCode: string;
-  materialName: string;
-  plannedConsumption: number;
-
+  // START_JOB anında alınan değer
   startWeight: number;
 
-  // Gerçek fiziksel/sanal ağırlık
+  // Simülasyondaki gerçek sanal ağırlık
   processWeight: number;
 
-  // Tartının ekranda gösterdiği ölçüm
+  // Tartının ekranda gösterdiği değer
   currentWeight: number;
 
+  // Başlangıç - anlık
   consumption: number;
-
-  consumptionPerRealSecond: number;
 };
 
-export type SimulationState =
-  | "IDLE"
-  | "RUNNING"
-  | "COMPLETED";
+export type SimulationState = "IDLE" | "RUNNING" | "COMPLETED";
+
+export type Job = {
+  workOrderNo: string;
+  startedAt: string;
+};
 
 export type StartJobSignal = {
   messageType: "START_JOB";
   source: "ERP";
   workOrderNo: string;
-  productCode: string;
-  productName: string;
-  quantity: number;
-  recipeCode: string;
 };
 
 export type EndJobSignal = {
@@ -61,61 +38,50 @@ export type EndJobSignal = {
   workOrderNo: string;
 };
 
-export type ErpSignal =
-  | StartJobSignal
-  | EndJobSignal;
+export type ErpSignal = StartJobSignal | EndJobSignal;
+
+export type ScaleResult = {
+  stationNo: number;
+  scaleNo: number;
+
+  startWeight: number;
+  endWeight: number;
+
+  consumption: number;
+};
 
 export type OutgoingMessage = {
   messageType: "JOB_COMPLETED";
+
   target: "ERP";
 
   workOrderNo: string;
 
   status: "COMPLETED";
 
-  completionReason: "ERP_END_SIGNAL";
-
   simulatedDurationSeconds: number;
 
-  totalPlannedConsumption: number;
-  totalActualConsumption: number;
-  totalDeviation: number;
+  totalConsumption: number;
 
-  scaleResults: {
-    stationNo: number;
-    scaleNo: number;
-
-    materialCode: string;
-
-    startWeight: number;
-    endWeight: number;
-
-    consumption: number;
-  }[];
+  scaleResults: ScaleResult[];
 };
 
-export type EventLevel =
-  | "INFO"
-  | "SUCCESS"
-  | "WARNING";
+export type EventLevel = "INFO" | "SUCCESS" | "WARNING";
 
 export type EventLog = {
   id: number;
+
   time: string;
+
   level: EventLevel;
+
   message: string;
 };
 
-export type CompletedJobRecord =
-  OutgoingMessage & {
-    id: string;
+export type CompletedJobRecord = OutgoingMessage & {
+  id: string;
 
-    productCode: string;
-    productName: string;
+  startedAt: string;
 
-    quantity: number;
-
-    recipeCode: string;
-
-    completedAt: string;
-  };
+  completedAt: string;
+};

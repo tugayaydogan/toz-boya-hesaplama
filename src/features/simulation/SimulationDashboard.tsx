@@ -1,118 +1,79 @@
 "use client";
 
 import Link from "next/link";
+
+import { useEffect, useRef, useState } from "react";
+
+import { createInitialScales, formatSimulationTime } from "./data";
+
 import {
   SIMULATION_SPEED,
   SIMULATION_TICK_MS,
   simulateScaleTick,
 } from "./simulator";
-import {
-  useEffect,
-  useRef,
-  useState,
-} from "react";
 
-import {
-  DEMO_RECIPE,
-  INITIAL_WEIGHTS,
-  REAL_JOB_DURATION_SECONDS,
-  SCALE_DEFINITIONS,
-  createInitialScales,
-  formatSimulationTime,
-} from "./data";
-
-import {
+import type {
   CompletedJobRecord,
+  EndJobSignal,
   ErpSignal,
   EventLevel,
   EventLog,
-  JobOrder,
+  Job,
   OutgoingMessage,
   ScaleState,
   SimulationState,
   StartJobSignal,
-  EndJobSignal,
 } from "./types";
 
-import {
-  saveCompletedJob,
-} from "./storage";
+import { getCompletedJobs, saveCompletedJob } from "./storage";
 
 import {
-  Arrow,
   EmptyMessage,
   EventRow,
-  FlowBox,
   Info,
   JsonViewer,
   MainButton,
   MessageBox,
   Metric,
   Panel,
-  ScaleRow,
-  StatusBadge,
   StatusItem,
   TableCell,
   TableHeader,
 } from "./ui";
 
+import ScaleCard from "./ScaleCard";
+import ProcessOverview from "./ProcessOverview";
+
 export default function SimulationDashboard() {
-  const [scales, setScales] =
-    useState<ScaleState[]>(
-      createInitialScales()
-    );
+  const [scales, setScales] = useState<ScaleState[]>(createInitialScales());
 
-  const [jobOrder, setJobOrder] =
-    useState<JobOrder | null>(null);
+  const [job, setJob] = useState<Job | null>(null);
 
-  const [systemState, setSystemState] =
-    useState<SimulationState>("IDLE");
+  const [systemState, setSystemState] = useState<SimulationState>("IDLE");
 
-  const [
-    simulatedSeconds,
-    setSimulatedSeconds,
-  ] = useState(0);
+  const [simulatedSeconds, setSimulatedSeconds] = useState(0);
 
-  const [
-    nextJobNumber,
-    setNextJobNumber,
-  ] = useState(1);
+  const [erpSignals, setErpSignals] = useState<ErpSignal[]>([]);
 
-  const [
-    erpSignals,
-    setErpSignals,
-  ] = useState<ErpSignal[]>([]);
+  const [outgoingMessage, setOutgoingMessage] =
+    useState<OutgoingMessage | null>(null);
 
-  const [
-    outgoingMessage,
-    setOutgoingMessage,
-  ] =
-    useState<OutgoingMessage | null>(
-      null
-    );
+  const [eventLogs, setEventLogs] = useState<EventLog[]>([]);
 
-  const [eventLogs, setEventLogs] =
-    useState<EventLog[]>([]);
+  const [presentationMode, setPresentationMode] = useState(false);
 
-  const intervalRef =
-    useRef<ReturnType<
-      typeof setInterval
-    > | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const logIdRef = useRef(1);
 
-  const running =
-    systemState === "RUNNING";
+  const running = systemState === "RUNNING";
 
-  const finished =
-    systemState === "COMPLETED";
+  const finished = systemState === "COMPLETED";
 
   useEffect(() => {
     return () => {
       if (intervalRef.current) {
-        clearInterval(
-          intervalRef.current
-        );
+        clearInterval(intervalRef.current);
       }
     };
   }, []);
@@ -120,276 +81,130 @@ export default function SimulationDashboard() {
   function addEvent(
     message: string,
     level: EventLevel = "INFO",
-    timeSeconds = simulatedSeconds
+    time = simulatedSeconds,
   ) {
-    const event: EventLog = {
-      id: logIdRef.current++,
+    setEventLogs((previous) => [
+      ...previous,
+      {
+        id: logIdRef.current++,
 
-      time:
-        formatSimulationTime(
-          timeSeconds
-        ),
+        time: formatSimulationTime(time),
 
-      level,
+        level,
 
-      message,
-    };
-
-    setEventLogs(
-      (previous) => [
-        ...previous,
-        event,
-      ]
-    );
+        message,
+      },
+    ]);
   }
 
-  /*
-    GERÇEK SİSTEM MANTIĞI:
-
-    ERP'den START_JOB gelir.
-
-    O anda:
-    - iş emri alınır
-    - tartıların başlangıç değerleri okunur
-    - üretim başlar
-  */
-  function startJobFromERP() {
+  async function startJobFromERP() {
     if (systemState !== "IDLE") {
       return;
     }
 
-    const newJob: JobOrder = {
-      workOrderNo: `WO-2026-${String(
-        nextJobNumber
-      ).padStart(3, "0")}`,
+    const previousJobs = await getCompletedJobs();
 
-      productCode: "HEX-001",
+    const highestJobNumber = previousJobs.reduce((highest, previousJob) => {
+      const match = previousJob.workOrderNo.match(/WO-2026-(\d+)/);
 
-      productName:
-        "Klima Eşanjörü",
+      if (!match) {
+        return highest;
+      }
 
-      quantity: 250,
+      const number = Number(match[1]);
 
-      recipeCode:
-        "REC-RAL9010-001",
+      return Math.max(highest, number);
+    }, 0);
 
-      recipe: DEMO_RECIPE,
+    const nextJobNumber = highestJobNumber + 1;
+
+    const workOrderNo = `WO-2026-${String(nextJobNumber).padStart(3, "0")}`;
+
+    const startedAt = new Date().toISOString();
+
+    const newJob: Job = {
+      workOrderNo,
+      startedAt,
     };
-
-    const preparedScales =
-      SCALE_DEFINITIONS.map(
-        (scale) => {
-          const recipeItem =
-            newJob.recipe.find(
-              (item) =>
-                item.scaleNo ===
-                scale.scale_no
-            );
-
-          const startWeight =
-            INITIAL_WEIGHTS[
-              scale.scale_no
-            ] ?? 100;
-
-          const actualTarget =
-            recipeItem
-              ?.actualTargetConsumption ??
-            0;
-
-          return {
-            ...scale,
-
-            materialCode:
-              recipeItem
-                ?.materialCode ?? "-",
-
-            materialName:
-              recipeItem
-                ?.materialName ??
-              "Malzeme tanımsız",
-
-            plannedConsumption:
-              recipeItem
-                ?.plannedConsumption ??
-              0,
-
-            /*
-              Demo için nominal tüketim
-              yaklaşık 15 simülasyon
-              dakikasına göre ayarlanıyor.
-
-              Ancak işi bitiren şey süre değil,
-              ERP END_JOB sinyali.
-            */
-            consumptionPerRealSecond:
-              actualTarget /
-              REAL_JOB_DURATION_SECONDS,
-
-            startWeight,
-
-processWeight:
-  startWeight,
-
-currentWeight:
-  startWeight,
-
-consumption: 0,
-          };
-        }
-      );
 
     const startSignal: StartJobSignal = {
       messageType: "START_JOB",
 
       source: "ERP",
 
-      workOrderNo:
-        newJob.workOrderNo,
-
-      productCode:
-        newJob.productCode,
-
-      productName:
-        newJob.productName,
-
-      quantity:
-        newJob.quantity,
-
-      recipeCode:
-        newJob.recipeCode,
+      workOrderNo,
     };
 
-    setJobOrder(newJob);
+    /*
+      START_JOB geldiği anda
+      başlangıç tartı değerlerini alıyoruz.
+    */
+    const initialScales = createInitialScales();
 
-    setNextJobNumber(
-      (previous) =>
-        previous + 1
-    );
+    setScales(initialScales);
 
-    setScales(
-      preparedScales
-    );
+    setJob(newJob);
 
-    setErpSignals([
-      startSignal,
-    ]);
+    setErpSignals([startSignal]);
 
-    setOutgoingMessage(
-      null
-    );
+    setOutgoingMessage(null);
 
-    setSimulatedSeconds(
-      0
-    );
+    setSimulatedSeconds(0);
 
-    setSystemState(
-      "RUNNING"
-    );
+    setSystemState("RUNNING");
 
     setEventLogs([
       {
-        id:
-          logIdRef.current++,
+        id: logIdRef.current++,
 
-        time:
-          "0 dk 0 sn",
+        time: "0 dk 0 sn",
 
-        level:
-          "SUCCESS",
+        level: "SUCCESS",
 
-        message:
-          `ERP START_JOB sinyali alındı. İş Emri: ${newJob.workOrderNo}`,
+        message: `ERP START_JOB alındı. İş Emri: ${workOrderNo}`,
       },
 
       {
-        id:
-          logIdRef.current++,
+        id: logIdRef.current++,
 
-        time:
-          "0 dk 0 sn",
+        time: "0 dk 0 sn",
 
-        level:
-          "INFO",
+        level: "INFO",
 
-        message:
-          "5 tartının başlangıç ağırlıkları kaydedildi.",
+        message: "5 tartının başlangıç değerleri kaydedildi.",
       },
 
       {
-        id:
-          logIdRef.current++,
+        id: logIdRef.current++,
 
-        time:
-          "0 dk 0 sn",
+        time: "0 dk 0 sn",
 
-        level:
-          "SUCCESS",
+        level: "SUCCESS",
 
-        message:
-          "Üretim simülasyonu başlatıldı.",
+        message: "x30 simülasyon başlatıldı.",
       },
     ]);
 
-    intervalRef.current =
-      setInterval(() => {
-        setSimulatedSeconds(
-          (previous) =>
-            previous +
-            SIMULATION_SPEED
-        );
+    intervalRef.current = setInterval(() => {
+      setSimulatedSeconds(
+        (previous) => previous + (SIMULATION_TICK_MS / 1000) * SIMULATION_SPEED,
+      );
 
-        setScales(
-          (previousScales) =>
-            previousScales.map(
-              (scale) => {
-                const newWeight =
-                  Math.max(
-                    0,
-
-                    scale.currentWeight -
-                      scale.consumptionPerRealSecond
-                  );
-
-                return {
-                  ...scale,
-
-                  currentWeight:
-                    newWeight,
-
-                  consumption:
-                    scale.startWeight -
-                    newWeight,
-                };
-              }
-            )
-        );
-      }, 1000);
+      setScales((previous) =>
+        previous.map((scale) => simulateScaleTick(scale)),
+      );
+    }, SIMULATION_TICK_MS);
   }
 
-  /*
-    ERP'den END_JOB gelir.
-
-    O anda:
-    - tartıların bitiş değerleri okunur
-    - tüketim hesaplanır
-    - ERP cevabı hazırlanır
-  */
   function endJobFromERP() {
-    if (
-      systemState !==
-        "RUNNING" ||
-      !jobOrder
-    ) {
+    if (!job || systemState !== "RUNNING") {
       return;
     }
 
     if (intervalRef.current) {
-      clearInterval(
-        intervalRef.current
-      );
+      clearInterval(intervalRef.current);
 
-      intervalRef.current =
-        null;
+      intervalRef.current = null;
     }
 
     const endSignal: EndJobSignal = {
@@ -397,244 +212,115 @@ consumption: 0,
 
       source: "ERP",
 
-      workOrderNo:
-        jobOrder.workOrderNo,
+      workOrderNo: job.workOrderNo,
     };
 
-    setErpSignals(
-      (previous) => [
-        ...previous,
-        endSignal,
-      ]
+    setErpSignals((previous) => [...previous, endSignal]);
+
+    /*
+      Gerçek sistem mantığı:
+
+      consumption =
+      startWeight - endWeight
+    */
+
+    const scaleResults = scales.map((scale) => {
+      const consumption = Math.max(0, scale.startWeight - scale.currentWeight);
+
+      return {
+        stationNo: scale.station_no,
+
+        scaleNo: scale.scale_no,
+
+        startWeight: Number(scale.startWeight.toFixed(3)),
+
+        endWeight: Number(scale.currentWeight.toFixed(3)),
+
+        consumption: Number(consumption.toFixed(3)),
+      };
+    });
+
+    const totalConsumption = scaleResults.reduce(
+      (total, result) => total + result.consumption,
+      0,
     );
 
-    const totalActual =
-      scales.reduce(
-        (total, scale) =>
-          total +
-          scale.consumption,
-        0
-      );
-
-    const totalPlanned =
-      scales.reduce(
-        (total, scale) =>
-          total +
-          scale.plannedConsumption,
-        0
-      );
-
     const message: OutgoingMessage = {
-      messageType:
-        "JOB_COMPLETED",
+      messageType: "JOB_COMPLETED",
 
       target: "ERP",
 
-      workOrderNo:
-        jobOrder.workOrderNo,
+      workOrderNo: job.workOrderNo,
 
-      status:
-        "COMPLETED",
+      status: "COMPLETED",
 
-      completionReason:
-        "ERP_END_SIGNAL",
+      simulatedDurationSeconds: simulatedSeconds,
 
-      simulatedDurationSeconds:
-        simulatedSeconds,
+      totalConsumption: Number(totalConsumption.toFixed(3)),
 
-      totalPlannedConsumption:
-        Number(
-          totalPlanned.toFixed(3)
-        ),
-
-      totalActualConsumption:
-        Number(
-          totalActual.toFixed(3)
-        ),
-
-      totalDeviation:
-        Number(
-          (
-            totalActual -
-            totalPlanned
-          ).toFixed(3)
-        ),
-
-      scaleResults:
-        scales.map(
-          (scale) => ({
-            stationNo:
-              scale.station_no,
-
-            scaleNo:
-              scale.scale_no,
-
-            materialCode:
-              scale.materialCode,
-
-            startWeight:
-              Number(
-                scale.startWeight.toFixed(
-                  3
-                )
-              ),
-
-            endWeight:
-              Number(
-                scale.currentWeight.toFixed(
-                  3
-                )
-              ),
-
-            consumption:
-              Number(
-                scale.consumption.toFixed(
-                  3
-                )
-              ),
-          })
-        ),
+      scaleResults,
     };
 
-    setOutgoingMessage(
-      message
-    );
+    setOutgoingMessage(message);
 
     const historyRecord: CompletedJobRecord = {
       ...message,
 
-      id:
-        `${jobOrder.workOrderNo}-${Date.now()}`,
+      id: `${job.workOrderNo}-${Date.now()}`,
 
-      productCode:
-        jobOrder.productCode,
+      startedAt: job.startedAt,
 
-      productName:
-        jobOrder.productName,
-
-      quantity:
-        jobOrder.quantity,
-
-      recipeCode:
-        jobOrder.recipeCode,
-
-      completedAt:
-        new Date().toISOString(),
+      completedAt: new Date().toISOString(),
     };
 
-    saveCompletedJob(
-      historyRecord
-    );
+    void saveCompletedJob(historyRecord);
 
-    setSystemState(
-      "COMPLETED"
-    );
+    setSystemState("COMPLETED");
 
-    addEvent(
-      "ERP END_JOB sinyali alındı.",
-      "INFO"
-    );
+    addEvent("ERP END_JOB sinyali alındı.", "INFO");
 
-    addEvent(
-      "5 tartının bitiş ağırlıkları kaydedildi.",
-      "INFO"
-    );
+    addEvent("5 tartının bitiş değerleri kaydedildi.", "INFO");
 
-    addEvent(
-      "Tüketim = Başlangıç ağırlığı - Bitiş ağırlığı hesaplandı.",
-      "SUCCESS"
-    );
+    addEvent("Tüketim = Başlangıç - Bitiş hesaplandı.", "SUCCESS");
 
-    addEvent(
-      "JOB_COMPLETED cevabı ERP için hazırlandı.",
-      "SUCCESS"
-    );
+    addEvent("JOB_COMPLETED cevabı ERP için hazırlandı.", "SUCCESS");
 
-    addEvent(
-      "İş sonucu geçmişe kaydedildi.",
-      "SUCCESS"
-    );
+    addEvent("Simülasyon sonucu iş geçmişine kaydedildi.", "SUCCESS");
   }
 
   function resetSimulation() {
     if (intervalRef.current) {
-      clearInterval(
-        intervalRef.current
-      );
+      clearInterval(intervalRef.current);
 
-      intervalRef.current =
-        null;
+      intervalRef.current = null;
     }
 
-    setSystemState(
-      "IDLE"
-    );
+    setSystemState("IDLE");
 
-    setJobOrder(
-      null
-    );
+    setJob(null);
+
+    setScales(createInitialScales());
+
+    setSimulatedSeconds(0);
 
     setErpSignals([]);
 
-    setOutgoingMessage(
-      null
-    );
-
-    setSimulatedSeconds(
-      0
-    );
+    setOutgoingMessage(null);
 
     setEventLogs([]);
-
-    setScales(
-      createInitialScales()
-    );
   }
 
-  const totalConsumption =
-    scales.reduce(
-      (total, scale) =>
-        total +
-        scale.consumption,
-      0
-    );
+  const totalConsumption = scales.reduce(
+    (total, scale) => total + scale.consumption,
+    0,
+  );
 
-  const totalPlannedConsumption =
-    scales.reduce(
-      (total, scale) =>
-        total +
-        scale.plannedConsumption,
-      0
-    );
-
-  const totalDeviation =
-    totalConsumption -
-    totalPlannedConsumption;
-
-  const consumptionProgress =
-    totalPlannedConsumption >
-    0
-      ? Math.min(
-          100,
-
-          (totalConsumption /
-            totalPlannedConsumption) *
-            100
-        )
-      : 0;
-
-  function processStatus() {
-    if (
-      systemState ===
-      "RUNNING"
-    ) {
+  function statusText() {
+    if (running) {
       return "ÜRETİM ÇALIŞIYOR";
     }
 
-    if (
-      systemState ===
-      "COMPLETED"
-    ) {
+    if (finished) {
       return "İŞ TAMAMLANDI";
     }
 
@@ -644,88 +330,94 @@ consumption: 0,
   return (
     <main
       style={{
-        minHeight:
-          "100vh",
+        minHeight: "100vh",
+        background: "#0f172a",
+        color: "white",
+        padding: "32px",
 
-        background:
-          "#0f172a",
-
-        color:
-          "white",
-
-        padding:
-          "32px",
-
-        fontFamily:
-          "Arial, Helvetica, sans-serif",
+        fontFamily: "Arial, Helvetica, sans-serif",
       }}
     >
-      {/* BAŞLIK */}
+      {/* HEADER */}
 
       <header
         style={{
-          marginBottom:
-            "25px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          gap: "20px",
+          flexWrap: "wrap",
+
+          marginBottom: "25px",
         }}
       >
-        <h1
+        <div>
+          <h1
+            style={{
+              marginBottom: "6px",
+            }}
+          >
+            Endüstriyel Tartım Simülatörü
+          </h1>
+
+          <p
+            style={{
+              margin: 0,
+              color: "#94a3b8",
+            }}
+          >
+            Node-RED Tartım ve ERP Entegrasyon Demo Sistemi
+          </p>
+
+          {!presentationMode && (
+            <Link
+              href="/history"
+              style={{
+                display: "inline-block",
+
+                marginTop: "15px",
+
+                padding: "10px 16px",
+
+                background: "#334155",
+
+                color: "white",
+
+                textDecoration: "none",
+
+                borderRadius: "8px",
+
+                fontWeight: "bold",
+              }}
+            >
+              İŞ GEÇMİŞİ
+            </Link>
+          )}
+        </div>
+
+        <button
+          onClick={() => setPresentationMode((previous) => !previous)}
           style={{
-            marginBottom:
-              "6px",
+            padding: "11px 18px",
+
+            background: presentationMode ? "#1d4ed8" : "#334155",
+
+            border: "1px solid #475569",
+
+            borderRadius: "9px",
+
+            color: "white",
+
+            cursor: "pointer",
+
+            fontWeight: "bold",
           }}
         >
-          Endüstriyel Tartım
-          Simülatörü
-        </h1>
-
-        <p
-          style={{
-            color:
-              "#94a3b8",
-
-            margin: 0,
-          }}
-        >
-          Node-RED Tartım ve ERP
-          Entegrasyon Demo Sistemi
-        </p>
-
-        <Link
-          href="/history"
-          style={{
-            display:
-              "inline-block",
-
-            marginTop:
-              "15px",
-
-            padding:
-              "10px 16px",
-
-            background:
-              "#334155",
-
-            color:
-              "white",
-
-            textDecoration:
-              "none",
-
-            borderRadius:
-              "8px",
-
-            fontWeight:
-              "bold",
-
-            fontSize:
-              "13px",
-          }}
-        >
-          İŞ GEÇMİŞİ
-        </Link>
+          {presentationMode ? "TEKNİK MODA DÖN" : "SUNUM MODU"}
+        </button>
       </header>
 
-      {/* ERP SİNYAL PANELİ */}
+      {/* ERP KONTROL */}
 
       <Panel>
         <h2
@@ -738,82 +430,42 @@ consumption: 0,
 
         <p
           style={{
-            color:
-              "#94a3b8",
+            color: "#94a3b8",
           }}
         >
-          Gerçek sistemde ERP tarafından
-          gönderilen başlangıç ve bitiş
-          sinyallerini burada simüle ediyoruz.
+          Gerçek sistemde ERP tarafından gönderilen START_JOB ve END_JOB
+          sinyallerini simüle eder.
         </p>
 
         <div
           style={{
-            display:
-              "flex",
-
-            alignItems:
-              "center",
-
-            gap:
-              "15px",
-
-            flexWrap:
-              "wrap",
+            display: "flex",
+            alignItems: "center",
+            gap: "18px",
+            flexWrap: "wrap",
           }}
         >
           <MainButton
-            onClick={
-              startJobFromERP
-            }
-            disabled={
-              systemState !==
-              "IDLE"
-            }
+            onClick={startJobFromERP}
+            disabled={systemState !== "IDLE"}
           >
             ERP → İŞ BAŞLAT
           </MainButton>
 
-          <MainButton
-            onClick={
-              endJobFromERP
-            }
-            disabled={
-              systemState !==
-              "RUNNING"
-            }
-          >
+          <MainButton onClick={endJobFromERP} disabled={!running}>
             ERP → İŞ BİTİR
           </MainButton>
 
-          <MainButton
-            onClick={
-              resetSimulation
-            }
-          >
-            SIFIRLA
-          </MainButton>
+          <MainButton onClick={resetSimulation}>SIFIRLA</MainButton>
+
+          <StatusItem label="Durum" value={statusText()} />
 
           <StatusItem
-            label="Durum"
-            value={
-              processStatus()
-            }
+            label="Simülasyon"
+            value={formatSimulationTime(simulatedSeconds)}
           />
 
-          <StatusItem
-            label="Simülasyon Süresi"
-            value={
-              formatSimulationTime(
-                simulatedSeconds
-              )
-            }
-          />
-
-          <StatusItem
-            label="Hız"
-            value="x30"
-          />
+          <StatusItem label="Hız" value="x30" />
         </div>
       </Panel>
 
@@ -825,249 +477,85 @@ consumption: 0,
             marginTop: 0,
           }}
         >
-          Aktif İş Emri
+          Aktif İş
         </h2>
 
-        {!jobOrder ? (
+        {job ? (
           <div
             style={{
-              color:
-                "#64748b",
-
-              padding:
-                "15px 0",
+              display: "flex",
+              gap: "50px",
+              flexWrap: "wrap",
             }}
           >
-            ERP START_JOB sinyali
-            bekleniyor.
+            <Info title="İş Emri" value={job.workOrderNo} />
+
+            <Info
+              title="Başlangıç"
+              value={new Date(job.startedAt).toLocaleString("tr-TR")}
+            />
+
+            <Info title="Durum" value={statusText()} />
           </div>
         ) : (
           <div
             style={{
-              display:
-                "flex",
-
-              gap:
-                "45px",
-
-              flexWrap:
-                "wrap",
+              color: "#64748b",
             }}
           >
-            <Info
-              title="İş Emri"
-              value={
-                jobOrder.workOrderNo
-              }
-            />
-
-            <Info
-              title="Ürün Kodu"
-              value={
-                jobOrder.productCode
-              }
-            />
-
-            <Info
-              title="Ürün"
-              value={
-                jobOrder.productName
-              }
-            />
-
-            <Info
-              title="Üretim Adedi"
-              value={String(
-                jobOrder.quantity
-              )}
-            />
-
-            <Info
-              title="Reçete"
-              value={
-                jobOrder.recipeCode
-              }
-            />
+            ERP START_JOB sinyali bekleniyor.
           </div>
         )}
       </Panel>
 
-      {/* MESAJ MONİTÖRÜ */}
+      {/* TEKNİK ERP MESAJLARI */}
 
-      <Panel>
-        <h2
-          style={{
-            marginTop: 0,
-          }}
-        >
-          ERP Mesaj Monitörü
-        </h2>
-
-        <div
-          style={{
-            display:
-              "grid",
-
-            gridTemplateColumns:
-              "repeat(auto-fit, minmax(420px, 1fr))",
-
-            gap:
-              "20px",
-          }}
-        >
-          <MessageBox
-            title="ERP → Tartım Sistemi"
-            badge="GELEN SİNYALLER"
+      {!presentationMode && (
+        <Panel>
+          <h2
+            style={{
+              marginTop: 0,
+            }}
           >
-            {erpSignals.length >
-            0 ? (
-              <JsonViewer
-                data={
-                  erpSignals
-                }
-              />
-            ) : (
-              <EmptyMessage>
-                ERP sinyali
-                bekleniyor...
-              </EmptyMessage>
-            )}
-          </MessageBox>
+            ERP Mesaj Monitörü
+          </h2>
 
-          <MessageBox
-            title="Tartım Sistemi → ERP"
-            badge={
-              outgoingMessage
-                ? "CEVAP HAZIR"
-                : "BEKLİYOR"
-            }
+          <div
+            style={{
+              display: "grid",
+
+              gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))",
+
+              gap: "20px",
+            }}
           >
-            {outgoingMessage ? (
-              <JsonViewer
-                data={
-                  outgoingMessage
-                }
-              />
-            ) : (
-              <EmptyMessage>
-                İş bitiş sinyali
-                bekleniyor...
-              </EmptyMessage>
-            )}
-          </MessageBox>
-        </div>
-      </Panel>
+            <MessageBox title="ERP → Tartım Sistemi" badge="GELEN">
+              {erpSignals.length ? (
+                <JsonViewer data={erpSignals} />
+              ) : (
+                <EmptyMessage>ERP sinyali bekleniyor...</EmptyMessage>
+              )}
+            </MessageBox>
 
-      {/* PROSES AKIŞI */}
+            <MessageBox
+              title="Tartım Sistemi → ERP"
+              badge={outgoingMessage ? "CEVAP HAZIR" : "BEKLİYOR"}
+            >
+              {outgoingMessage ? (
+                <JsonViewer data={outgoingMessage} />
+              ) : (
+                <EmptyMessage>END_JOB sinyali bekleniyor...</EmptyMessage>
+              )}
+            </MessageBox>
+          </div>
+        </Panel>
+      )}
 
-      <Panel>
-        <h2
-          style={{
-            marginTop: 0,
-          }}
-        >
-          Sistem Akışı
-        </h2>
+      {/* PROSES */}
 
-        <div
-          style={{
-            display:
-              "flex",
+      <ProcessOverview scales={scales} running={running} finished={finished} />
 
-            alignItems:
-              "stretch",
-
-            gap:
-              "12px",
-
-            flexWrap:
-              "wrap",
-          }}
-        >
-          <FlowBox
-            title="ERP"
-            subtitle="START_JOB"
-            status={
-              running ||
-              finished
-                ? "ALINDI"
-                : "BEKLİYOR"
-            }
-            active={
-              running ||
-              finished
-            }
-          />
-
-          <Arrow />
-
-          <FlowBox
-            title="İstasyon 1"
-            subtitle="Tartı 1 + Tartı 2"
-            status={
-              running
-                ? "ÖLÇÜM AKTİF"
-                : finished
-                ? "TAMAMLANDI"
-                : "BEKLEME"
-            }
-            active={
-              running
-            }
-          />
-
-          <Arrow />
-
-          <FlowBox
-            title="İstasyon 2"
-            subtitle="Tartı 3 + Tartı 4"
-            status={
-              running
-                ? "ÖLÇÜM AKTİF"
-                : finished
-                ? "TAMAMLANDI"
-                : "BEKLEME"
-            }
-            active={
-              running
-            }
-          />
-
-          <Arrow />
-
-          <FlowBox
-            title="İstasyon 3"
-            subtitle="Tartı 5"
-            status={
-              running
-                ? "ÖLÇÜM AKTİF"
-                : finished
-                ? "TAMAMLANDI"
-                : "BEKLEME"
-            }
-            active={
-              running
-            }
-          />
-
-          <Arrow />
-
-          <FlowBox
-            title="ERP"
-            subtitle="Tüketim Cevabı"
-            status={
-              finished
-                ? "CEVAP HAZIR"
-                : "BEKLİYOR"
-            }
-            active={
-              finished
-            }
-          />
-        </div>
-      </Panel>
-
-      {/* CANLI ÖZET */}
+      {/* ÖZET */}
 
       <Panel>
         <h2
@@ -1075,409 +563,168 @@ consumption: 0,
             marginTop: 0,
           }}
         >
-          Canlı Tüketim Özeti
+          Canlı Simülasyon Özeti
         </h2>
 
         <div
           style={{
-            display:
-              "flex",
-
-            gap:
-              "50px",
-
-            flexWrap:
-              "wrap",
+            display: "flex",
+            gap: "50px",
+            flexWrap: "wrap",
           }}
         >
           <Metric
-            title="Planlanan"
-            value={`${totalPlannedConsumption.toFixed(
-              3
-            )} kg`}
+            title="Toplam Tüketim"
+            value={`${totalConsumption.toFixed(3)} kg`}
           />
 
           <Metric
-            title="Anlık Tüketim"
-            value={`${totalConsumption.toFixed(
-              3
-            )} kg`}
+            title="Simülasyon Süresi"
+            value={formatSimulationTime(simulatedSeconds)}
           />
 
-          <Metric
-            title="Gerçekleşme"
-            value={`${consumptionProgress.toFixed(
-              1
-            )} %`}
-          />
+          <Metric title="Aktif Tartı" value="5" />
         </div>
       </Panel>
 
-      {/* TARTILAR */}
+      {/* İSTASYONLAR */}
 
-      {[1, 2, 3].map(
-        (stationNo) => {
-          const stationScales =
-            scales.filter(
-              (scale) =>
-                scale.station_no ===
-                stationNo
-            );
+      {[1, 2, 3].map((stationNo) => {
+        const stationScales = scales.filter(
+          (scale) => scale.station_no === stationNo,
+        );
 
-          return (
-            <section
-              key={
-                stationNo
-              }
+        return (
+          <section
+            key={stationNo}
+            style={{
+              marginBottom: "22px",
+
+              background: "#1e293b",
+
+              padding: "22px",
+
+              borderRadius: "14px",
+            }}
+          >
+            <h2>İstasyon {stationNo}</h2>
+
+            <div
               style={{
-                marginBottom:
-                  "22px",
-
-                background:
-                  "#1e293b",
-
-                padding:
-                  "22px",
-
-                borderRadius:
-                  "14px",
+                display: "flex",
+                gap: "20px",
+                flexWrap: "wrap",
               }}
             >
-              <div
-                style={{
-                  display:
-                    "flex",
-
-                  justifyContent:
-                    "space-between",
-
-                  alignItems:
-                    "center",
-
-                  marginBottom:
-                    "20px",
-                }}
-              >
-                <h2
-                  style={{
-                    margin:
-                      0,
-                  }}
-                >
-                  İstasyon{" "}
-                  {stationNo}
-                </h2>
-
-                <StatusBadge
-                  text={
-                    running
-                      ? "CANLI"
-                      : finished
-                      ? "TAMAMLANDI"
-                      : "BEKLEME"
-                  }
-                  active={
-                    running
-                  }
+              {stationScales.map((scale) => (
+                <ScaleCard
+                  key={scale.id}
+                  scale={scale}
+                  running={running}
+                  finished={finished}
                 />
-              </div>
-
-              <div
-                style={{
-                  display:
-                    "flex",
-
-                  gap:
-                    "20px",
-
-                  flexWrap:
-                    "wrap",
-                }}
-              >
-                {stationScales.map(
-                  (scale) => (
-                    <div
-                      key={
-                        scale.id
-                      }
-                      style={{
-                        width:
-                          "310px",
-
-                        padding:
-                          "22px",
-
-                        background:
-                          "#334155",
-
-                        borderRadius:
-                          "12px",
-                      }}
-                    >
-                      <strong>
-                        {
-                          scale.scale_name
-                        }
-                      </strong>
-
-                      <div
-                        style={{
-                          color:
-                            "#94a3b8",
-
-                          marginTop:
-                            "10px",
-                        }}
-                      >
-                        {
-                          scale.materialCode
-                        }
-                      </div>
-
-                      <div
-                        style={{
-                          marginTop:
-                            "5px",
-                        }}
-                      >
-                        {
-                          scale.materialName
-                        }
-                      </div>
-
-                      <div
-                        style={{
-                          fontSize:
-                            "34px",
-
-                          fontWeight:
-                            "bold",
-
-                          margin:
-                            "18px 0",
-                        }}
-                      >
-                        {scale.currentWeight.toFixed(
-                          3
-                        )}{" "}
-                        kg
-                      </div>
-
-                      <ScaleRow
-                        label="Başlangıç"
-                        value={`${scale.startWeight.toFixed(
-                          3
-                        )} kg`}
-                      />
-
-                      <ScaleRow
-                        label="Anlık"
-                        value={`${scale.currentWeight.toFixed(
-                          3
-                        )} kg`}
-                      />
-
-                      <ScaleRow
-                        label="Tüketim"
-                        value={`${scale.consumption.toFixed(
-                          3
-                        )} kg`}
-                      />
-                    </div>
-                  )
-                )}
-              </div>
-            </section>
-          );
-        }
-      )}
+              ))}
+            </div>
+          </section>
+        );
+      })}
 
       {/* EVENT LOG */}
 
-      <Panel>
-        <h2
-          style={{
-            marginTop: 0,
-          }}
-        >
-          Sistem Günlüğü
-        </h2>
-
-        {eventLogs.length ===
-        0 ? (
-          <div
+      {!presentationMode && (
+        <Panel>
+          <h2
             style={{
-              color:
-                "#64748b",
+              marginTop: 0,
             }}
           >
-            Sistem olayı
-            bulunmuyor.
-          </div>
-        ) : (
-          eventLogs
-            .slice()
-            .reverse()
-            .map(
-              (event) => (
-                <EventRow
-                  key={
-                    event.id
-                  }
-                  event={
-                    event
-                  }
-                />
-              )
-            )
-        )}
-      </Panel>
+            Sistem Günlüğü
+          </h2>
+
+          {eventLogs.length ? (
+            eventLogs
+              .slice()
+              .reverse()
+              .map((event) => <EventRow key={event.id} event={event} />)
+          ) : (
+            <div
+              style={{
+                color: "#64748b",
+              }}
+            >
+              Henüz sistem olayı yok.
+            </div>
+          )}
+        </Panel>
+      )}
 
       {/* SONUÇ */}
 
-      {finished &&
-        jobOrder && (
-          <Panel>
-            <h2
+      {finished && outgoingMessage && (
+        <Panel>
+          <h2
+            style={{
+              marginTop: 0,
+            }}
+          >
+            ERP&apos;ye Gönderilecek Tüketim Sonucu
+          </h2>
+
+          <div
+            style={{
+              overflowX: "auto",
+            }}
+          >
+            <table
               style={{
-                marginTop: 0,
+                width: "100%",
+                borderCollapse: "collapse",
               }}
             >
-              ERP&apos;ye
-              Gönderilecek
-              Tüketim Sonucu
-            </h2>
+              <thead>
+                <tr>
+                  <TableHeader>İstasyon</TableHeader>
 
-            <div
-              style={{
-                overflowX:
-                  "auto",
-              }}
-            >
-              <table
-                style={{
-                  width:
-                    "100%",
+                  <TableHeader>Tartı</TableHeader>
 
-                  borderCollapse:
-                    "collapse",
-                }}
-              >
-                <thead>
-                  <tr>
-                    <TableHeader>
-                      İstasyon
-                    </TableHeader>
+                  <TableHeader>Başlangıç</TableHeader>
 
-                    <TableHeader>
-                      Tartı
-                    </TableHeader>
+                  <TableHeader>Bitiş</TableHeader>
 
-                    <TableHeader>
-                      Başlangıç
-                    </TableHeader>
+                  <TableHeader>Tüketim</TableHeader>
+                </tr>
+              </thead>
 
-                    <TableHeader>
-                      Bitiş
-                    </TableHeader>
+              <tbody>
+                {outgoingMessage.scaleResults.map((result) => (
+                  <tr key={result.scaleNo}>
+                    <TableCell>İstasyon {result.stationNo}</TableCell>
 
-                    <TableHeader>
-                      Tüketim
-                    </TableHeader>
+                    <TableCell>Tartı {result.scaleNo}</TableCell>
+
+                    <TableCell>{result.startWeight.toFixed(3)} kg</TableCell>
+
+                    <TableCell>{result.endWeight.toFixed(3)} kg</TableCell>
+
+                    <TableCell>{result.consumption.toFixed(3)} kg</TableCell>
                   </tr>
-                </thead>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
-                <tbody>
-                  {scales.map(
-                    (scale) => (
-                      <tr
-                        key={
-                          scale.id
-                        }
-                      >
-                        <TableCell>
-                          İstasyon{" "}
-                          {
-                            scale.station_no
-                          }
-                        </TableCell>
-
-                        <TableCell>
-                          {
-                            scale.scale_name
-                          }
-                        </TableCell>
-
-                        <TableCell>
-                          {scale.startWeight.toFixed(
-                            3
-                          )}{" "}
-                          kg
-                        </TableCell>
-
-                        <TableCell>
-                          {scale.currentWeight.toFixed(
-                            3
-                          )}{" "}
-                          kg
-                        </TableCell>
-
-                        <TableCell>
-                          {scale.consumption.toFixed(
-                            3
-                          )}{" "}
-                          kg
-                        </TableCell>
-                      </tr>
-                    )
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            <div
-              style={{
-                display:
-                  "flex",
-
-                gap:
-                  "50px",
-
-                marginTop:
-                  "30px",
-
-                flexWrap:
-                  "wrap",
-              }}
-            >
-              <Metric
-                title="Planlanan Toplam"
-                value={`${totalPlannedConsumption.toFixed(
-                  3
-                )} kg`}
-              />
-
-              <Metric
-                title="Gerçek Tüketim"
-                value={`${totalConsumption.toFixed(
-                  3
-                )} kg`}
-              />
-
-              <Metric
-                title="Sapma"
-                value={`${
-                  totalDeviation >=
-                  0
-                    ? "+"
-                    : ""
-                }${totalDeviation.toFixed(
-                  3
-                )} kg`}
-              />
-            </div>
-          </Panel>
-        )}
+          <div
+            style={{
+              marginTop: "30px",
+            }}
+          >
+            <Metric
+              title="Toplam Tüketim"
+              value={`${outgoingMessage.totalConsumption.toFixed(3)} kg`}
+            />
+          </div>
+        </Panel>
+      )}
     </main>
   );
 }
